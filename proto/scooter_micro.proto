@@ -1,0 +1,89 @@
+syntax = "proto3";
+import "google/protobuf/timestamp.proto";
+package proto;
+option go_package = "./;proto";
+
+
+service ScooterService {
+  rpc Register(ClientRequest) returns (stream ServerMessage) {};
+  rpc Receive(stream ClientMessage) returns (ServerMessage) {};
+  rpc GetAllScooters(Request) returns (ScooterList) {};
+  rpc GetAllScootersByStationID(StationID) returns (ScooterList) {};
+  rpc GetScooterById(ScooterID) returns (Scooter) {};
+  rpc GetScooterStatus(ScooterID) returns (ScooterStatus) {};
+  rpc SendCurrentStatus(SendStatus) returns (Response) {};
+  rpc CreateScooterStatusInRent(ScooterID) returns (ScooterStatusInRent) {};
+  rpc GetStationByID(StationID) returns (Station) {};
+}
+
+message Request {}
+
+message Response {}
+
+message Station {
+  uint64 id = 1;
+  string name = 2;
+  bool isActive = 3;
+  Location location = 4;
+}
+
+message Scooter {
+  uint64 id = 1;
+  string scooterModel = 2;
+  double maxWeight = 3;
+  double BatteryRemain = 4;
+  bool canBeRent = 5;
+}
+
+message ScooterList {
+  repeated Scooter scooters = 1;
+}
+
+message ScooterID {
+  uint64 id = 1;
+}
+
+message StationID {
+  uint64 id = 1;
+}
+
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message ScooterStatus {
+  Scooter scooter = 1;
+  Location location = 2;
+  double BatteryRemain = 3;
+  StationID stationID = 4;
+}
+
+message SendStatus {
+  uint64 scooterID = 1;
+  uint64 stationID = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double batteryRemain = 5;
+}
+
+message ScooterStatusInRent {
+  uint64 scooterID = 1;
+  uint64 StationID = 2;
+  google.protobuf.Timestamp dateTime = 3;
+  Location location = 4;
+}
+
+message ClientRequest {
+  uint64 id = 1;
+}
+
+message ClientMessage {
+  uint64 id = 1;
+  double longitude = 2;
+  double latitude = 3;
+}
+
+message ServerMessage {
+  uint32 code = 1;
+}
