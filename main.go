@@ -1,28 +1,28 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	_ "github.com/lib/pq"
-	"google.golang.org/grpc"
 	"log"
+	"net/http"
+	"scooter_micro/config"
 	"scooter_micro/proto"
 	"scooter_micro/repository"
+	"scooter_micro/routing"
+	"scooter_micro/routing/grpcserver"
+	"scooter_micro/routing/httpserver"
 	"scooter_micro/service"
 )
 
 func main() {
-	connectionString := "host=localhost port=5444 user=scooteradmin password=Megascooter! dbname=scooterdb sslmode" +
-		"=disable"
-	//connectionDB := fmt.Sprint("host=localhost port=5444 user=scooteradmin password=Megascooter! dbname=scooterdb
-	//sslmode
-	//=disable",
-	//config.PG_HOST,
-	//config.PG_PORT,
-	//config.POSTGRES_USER,
-	//config.POSTGRES_PASSWORD,
-	//config.POSTGRES_DB)
+	//connStr := "host=localhost port=5444 user=scooteradmin password=Megascooter! dbname=scooterdb sslmode=disable"
+	connectionString := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		config.PG_HOST,
+		config.PG_PORT,
+		config.POSTGRES_USER,
+		config.POSTGRES_PASSWORD,
+		config.POSTGRES_DB)
 
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
@@ -32,20 +32,11 @@ func main() {
 
 	scooterRepo := repository.NewScooterRepo(db)
 	scooterService := service.NewScooterService(scooterRepo)
-	id := &proto.ScooterID{Id: 3}
 
-	scooter, err := scooterService.GetScooterById(context.Background(), id)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	fmt.Println(scooter)
-
-	conn, err := grpc.DialContext(context.Background(), ":8000", grpc.WithInsecure())
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	_ = proto.NewScooterServiceClient(conn)
+	handler := routing.NewRouter(scooterService)
+	httpServer := httpserver.New(handler, httpserver.Port("8080"))
+	handler.HandleFunc("/scooter", httpServer.ScooterHandler)
+	grpcServer := grpcserver.NewGrpcServer()
+	proto.RegisterScooterServiceServer(grpcServer, httpServer)
+	http.ListenAndServe(":8080", handler)
 }

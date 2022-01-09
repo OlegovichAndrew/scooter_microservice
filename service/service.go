@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"google.golang.org/grpc"
 	"log"
+	"net"
+	"scooter_micro/config"
 	"scooter_micro/proto"
 	"scooter_micro/repository"
 	"time"
@@ -16,26 +18,24 @@ const (
 	interval      = 450
 )
 
+type Location struct {
+	Latitude  float64
+	Longitude float64
+}
+
 //ScooterService is a service which responsible for gRPC scooter.
 type ScooterService struct {
 	Repo *repository.ScooterRepo
 	*proto.UnimplementedScooterServiceServer
 }
 
-func (gss *ScooterService) Receive(server proto.ScooterService_ReceiveServer) error {
-	return nil
-}
-
-func (gss *ScooterService) Register(request *proto.ClientRequest, server proto.ScooterService_RegisterServer) error {
-	return nil
-}
-
 //ScooterClient is a struct with parameters which will be translated by the gRPC connection.
 type ScooterClient struct {
 	ID            uint64
-	coordinate    proto.Location
-	batteryRemain float64
-	stream        proto.ScooterService_ReceiveClient
+	Latitude      float64
+	Longitude     float64
+	BatteryRemain float64
+	Stream        proto.ScooterService_ReceiveClient
 }
 
 //NewScooterService creates a new GrpcScooterService.
@@ -46,13 +46,14 @@ func NewScooterService(repoScooter *repository.ScooterRepo) *ScooterService {
 }
 
 //NewGrpcScooterClient creates a new GrpcScooterClient with given parameters.
-func NewGrpcScooterClient(id uint64, coordinate *proto.Location, battery float64,
+func NewScooterClient(id uint64, latitude, longitude, battery float64,
 	stream proto.ScooterService_ReceiveClient) *ScooterClient {
 	return &ScooterClient{
 		ID:            id,
-		coordinate:    *coordinate,
-		batteryRemain: battery,
-		stream:        stream,
+		Latitude:      latitude,
+		Longitude:     longitude,
+		BatteryRemain: battery,
+		Stream:        stream,
 	}
 }
 
@@ -60,8 +61,7 @@ func NewGrpcScooterClient(id uint64, coordinate *proto.Location, battery float64
 //If they satisfy the conditions, function creates connection to the gRPC server, creates gRPC client,
 //calls 'run' function which moves the scooter to the destination point.
 //After finished moves it sends the current scooter status to the database.
-func (gss *ScooterService) InitAndRun(ctx context.Context, id *proto.ScooterID, chosenStationID int) error {
-	stationID := &proto.StationID{Id: uint64(chosenStationID)}
+func (gss *ScooterService) InitAndRun(ctx context.Context, id *proto.ScooterID, stationID *proto.StationID) error {
 	scooter, err := gss.GetScooterById(ctx, id)
 	if err != nil {
 		fmt.Println(err)
@@ -75,15 +75,15 @@ func (gss *ScooterService) InitAndRun(ctx context.Context, id *proto.ScooterID, 
 	}
 
 	if scooter.CanBeRent {
-		var coordinate *proto.Location
-		station, err := gss.GetStationByID(ctx, stationID)
+		var coordinate Location
+		station, err := gss.GetStationById(ctx, stationID)
 		if err != nil {
 			return err
 		}
-		coordinate.Latitude = station.Location.Latitude
-		coordinate.Longitude = station.Location.Longitude
+		coordinate.Latitude = station.Latitude
+		coordinate.Longitude = station.Longitude
 
-		conn, err := grpc.DialContext(ctx, ":8000", grpc.WithInsecure())
+		conn, err := grpc.DialContext(ctx, net.JoinHostPort("", config.GRPC_PORT), grpc.WithInsecure())
 
 		if err != nil {
 			log.Fatal(err)
@@ -96,23 +96,23 @@ func (gss *ScooterService) InitAndRun(ctx context.Context, id *proto.ScooterID, 
 			log.Fatal(err)
 		}
 
-		client := NewGrpcScooterClient(uint64(id.Id),
-			scooterStatus.Location, scooter.BatteryRemain, stream)
+		client := NewScooterClient(uint64(id.Id),
+			scooterStatus.Latitude, scooterStatus.Longitude, scooter.BatteryRemain, stream)
 		err = client.run(coordinate)
 		if err != nil {
 			fmt.Println(err)
 		}
 
 		sendStatus := &proto.SendStatus{
-			ScooterID: client.ID, StationID: uint64(chosenStationID),
-			Latitude: client.coordinate.Latitude, Longitude: client.coordinate.Longitude, BatteryRemain: client.batteryRemain}
+			ScooterID: client.ID, StationID: stationID.Id,
+			Latitude: client.Latitude, Longitude: client.Longitude, BatteryRemain: client.BatteryRemain}
 
 		_, err = gss.SendCurrentStatus(ctx, sendStatus)
 		if err != nil {
 			fmt.Println(err)
 		}
 
-		if client.batteryRemain <= 0 {
+		if client.BatteryRemain <= 0 {
 			err = fmt.Errorf("scooter battery discharged. Trip is over")
 			return err
 		}
@@ -131,10 +131,10 @@ func (s *ScooterClient) grpcScooterMessage() {
 	fmt.Println("executing run in client")
 	msg := &proto.ClientMessage{
 		Id:        s.ID,
-		Latitude:  s.coordinate.Latitude,
-		Longitude: s.coordinate.Longitude,
+		Latitude:  s.Latitude,
+		Longitude: s.Longitude,
 	}
-	err := s.stream.Send(msg)
+	err := s.Stream.Send(msg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -143,68 +143,67 @@ func (s *ScooterClient) grpcScooterMessage() {
 
 //run is responsible for scooter's movements from his current position to the destination point.
 //Run also is responsible for scooter's discharge. Every step battery charge decrease by the constant discharge value.
-func (s *ScooterClient) run(station *proto.Location) error {
+func (s *ScooterClient) run(station Location) error {
 
 	switch {
-	case s.coordinate.Latitude <= station.Latitude && s.coordinate.Longitude <= station.Longitude:
-		for ; s.coordinate.Latitude <= station.Latitude && s.coordinate.Longitude <= station.Longitude && s.
-			batteryRemain > 0; s.
-			coordinate.Latitude,
-			s.coordinate.Longitude, s.batteryRemain = s.coordinate.Latitude+step, s.coordinate.Longitude+step,
-			s.batteryRemain-dischargeStep {
-			s.grpcScooterMessage()
-		}
-		fallthrough
-	case s.coordinate.Latitude >= station.Latitude && s.coordinate.Longitude <= station.Longitude:
-		for ; s.coordinate.Latitude >= station.Latitude && s.coordinate.Longitude <= station.Longitude && s.
-			batteryRemain > 0; s.coordinate.
+	case s.Latitude <= station.Latitude && s.Longitude <= station.Longitude:
+		for ; s.Latitude <= station.Latitude && s.Longitude <= station.Longitude && s.
+			BatteryRemain > 0; s.
 			Latitude,
-			s.coordinate.Longitude, s.batteryRemain = s.coordinate.Latitude-step, s.coordinate.Longitude+step,
-			s.batteryRemain-dischargeStep {
+			s.Longitude, s.BatteryRemain = s.Latitude+step, s.Longitude+step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Latitude >= station.Latitude && s.coordinate.Longitude >= station.Longitude:
-		for ; s.coordinate.Latitude >= station.Latitude && s.coordinate.Longitude >= station.Longitude && s.
-			batteryRemain > 0; s.coordinate.
-			Latitude,
-			s.coordinate.Longitude, s.batteryRemain = s.coordinate.Latitude-step, s.coordinate.Longitude-step,
-			s.batteryRemain-dischargeStep {
+	case s.Latitude >= station.Latitude && s.Longitude <= station.Longitude:
+		for ; s.Latitude >= station.Latitude && s.Longitude <= station.Longitude && s.
+			BatteryRemain > 0; s.Latitude,
+			s.Longitude, s.BatteryRemain = s.Latitude-step, s.Longitude+step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Latitude <= station.Latitude && s.coordinate.Longitude >= station.Longitude:
-		for ; s.coordinate.Latitude <= station.Latitude && s.coordinate.Longitude >= station.Longitude && s.
-			batteryRemain > 0; s.coordinate.
-			Latitude,
-			s.coordinate.Longitude, s.batteryRemain = s.coordinate.Latitude+step, s.coordinate.Longitude-step,
-			s.batteryRemain-dischargeStep {
+	case s.Latitude >= station.Latitude && s.Longitude >= station.Longitude:
+		for ; s.Latitude >= station.Latitude && s.Longitude >= station.Longitude && s.
+			BatteryRemain > 0; s.Latitude,
+			s.Longitude, s.BatteryRemain = s.Latitude-step, s.Longitude-step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Latitude <= station.Latitude:
-		for ; s.coordinate.Latitude <= station.Latitude && s.
-			batteryRemain > 0; s.coordinate.Latitude, s.batteryRemain = s.coordinate.Latitude+step, s.batteryRemain-dischargeStep {
+	case s.Latitude <= station.Latitude && s.Longitude >= station.Longitude:
+		for ; s.Latitude <= station.Latitude && s.Longitude >= station.Longitude && s.
+			BatteryRemain > 0; s.Latitude,
+			s.Longitude, s.BatteryRemain = s.Latitude+step, s.Longitude-step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Latitude >= station.Latitude:
-		for ; s.coordinate.Latitude >= station.Latitude && s.
-			batteryRemain > 0; s.coordinate.Latitude, s.batteryRemain = s.coordinate.Latitude-step, s.batteryRemain-dischargeStep {
+	case s.Latitude <= station.Latitude:
+		for ; s.Latitude <= station.Latitude && s.
+			BatteryRemain > 0; s.Latitude, s.BatteryRemain = s.Latitude+step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Longitude >= station.Longitude:
-		for ; s.coordinate.Longitude >= station.Longitude && s.
-			batteryRemain > 0; s.coordinate.Longitude, s.batteryRemain = s.coordinate.Longitude-step,
-			s.batteryRemain-dischargeStep {
+	case s.Latitude >= station.Latitude:
+		for ; s.Latitude >= station.Latitude && s.
+			BatteryRemain > 0; s.Latitude, s.BatteryRemain = s.Latitude-step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 		fallthrough
-	case s.coordinate.Longitude <= station.Longitude:
-		for ; s.coordinate.Longitude <= station.Longitude && s.
-			batteryRemain > 0; s.coordinate.Longitude, s.batteryRemain = s.coordinate.Longitude+step,
-			s.batteryRemain-dischargeStep {
+	case s.Longitude >= station.Longitude:
+		for ; s.Longitude >= station.Longitude && s.
+			BatteryRemain > 0; s.Longitude, s.BatteryRemain = s.Longitude-step,
+			s.BatteryRemain-dischargeStep {
+			s.grpcScooterMessage()
+		}
+		fallthrough
+	case s.Longitude <= station.Longitude:
+		for ; s.Longitude <= station.Longitude && s.
+			BatteryRemain > 0; s.Longitude, s.BatteryRemain = s.Longitude+step,
+			s.BatteryRemain-dischargeStep {
 			s.grpcScooterMessage()
 		}
 	default:
@@ -223,9 +222,18 @@ func (gss *ScooterService) GetAllScootersByStationID(ctx context.Context, id *pr
 	return gss.Repo.GetAllScootersByStationID(ctx, id)
 }
 
+func (gss *ScooterService) GetAllStations(ctx context.Context, request *proto.Request) (*proto.StationList,
+	error) {
+	return gss.Repo.GetAllStations(ctx, request)
+}
+
 //GetScooterById gives the access to the ScooterRepo.GetScooterById function.
 func (gss *ScooterService) GetScooterById(ctx context.Context, id *proto.ScooterID) (*proto.Scooter, error) {
 	return gss.Repo.GetScooterById(ctx, id)
+}
+
+func (gss *ScooterService) GetStationById(ctx context.Context, id *proto.StationID) (*proto.Station, error) {
+	return gss.Repo.GetStationById(ctx, id)
 }
 
 //GetScooterStatus gives the access to the ScooterRepo.GetScooterStatus function.

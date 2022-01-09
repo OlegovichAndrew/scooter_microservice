@@ -14,6 +14,7 @@ service ScooterService {
   rpc SendCurrentStatus(SendStatus) returns (Response) {};
   rpc CreateScooterStatusInRent(ScooterID) returns (ScooterStatusInRent) {};
   rpc GetStationByID(StationID) returns (Station) {};
+  rpc GetAllStations(Request) returns (StationList) {};
 }
 
 message Request {}
@@ -24,7 +25,12 @@ message Station {
   uint64 id = 1;
   string name = 2;
   bool isActive = 3;
-  Location location = 4;
+  double latitude = 4;
+  double longitude = 5;
+}
+
+message StationList {
+  repeated Station stations = 1;
 }
 
 message Scooter {
@@ -47,16 +53,12 @@ message StationID {
   uint64 id = 1;
 }
 
-message Location {
-  double latitude = 1;
-  double longitude = 2;
-}
-
 message ScooterStatus {
   Scooter scooter = 1;
-  Location location = 2;
-  double BatteryRemain = 3;
-  StationID stationID = 4;
+  double latitude = 2;
+  double longitude = 3;
+  double BatteryRemain = 4;
+  StationID stationID = 5;
 }
 
 message SendStatus {
@@ -71,7 +73,8 @@ message ScooterStatusInRent {
   uint64 scooterID = 1;
   uint64 StationID = 2;
   google.protobuf.Timestamp dateTime = 3;
-  Location location = 4;
+  double latitude = 4;
+  double longitude = 5;
 }
 
 message ClientRequest {

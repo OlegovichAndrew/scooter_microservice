@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"log"
 	"scooter_micro/proto"
+	"time"
 )
 
 //ScooterRepository the interface which implemented by functions which connect to the database.
@@ -17,6 +19,7 @@ type ScooterRepository interface {
 	SendCurrentStatus(context context.Context, status *proto.SendStatus) (*proto.Response, error)
 	CreateScooterStatusInRent(context context.Context, id *proto.ScooterID) (*proto.ScooterStatusInRent, error)
 	GetStationById(ctx context.Context,id *proto.StationID) (*proto.Station, error)
+	GetAllStations(ctx context.Context, request *proto.Request) (*proto.StationList, error)
 }
 
 type ScooterRepo struct {
@@ -27,6 +30,7 @@ func NewScooterRepo(db *sql.DB) *ScooterRepo {
 	return &ScooterRepo{db: db}
 }
 
+//GetAllScooters - returns a list of all scooters into a database.
 func (scr *ScooterRepo) GetAllScooters(ctx context.Context, request *proto.Request) (*proto.ScooterList, error) {
 	scooterList := &proto.ScooterList{}
 
@@ -50,17 +54,48 @@ func (scr *ScooterRepo) GetAllScooters(ctx context.Context, request *proto.Reque
 	}()
 
 	for rows.Next() {
-		var scooter *proto.Scooter
+		var scooter proto.Scooter
 		err := rows.Scan(&scooter.Id, &scooter.MaxWeight, &scooter.ScooterModel, &scooter.BatteryRemain,
 			&scooter.CanBeRent)
 		if err != nil {
+			fmt.Println(err)
 			return nil, err
 		}
-		scooterList.Scooters = append(scooterList.Scooters, scooter)
+		scooterList.Scooters = append(scooterList.Scooters, &scooter)
 	}
 	return scooterList, nil
 }
 
+//GetAllStations - returns a list of all stations.
+func (scr *ScooterRepo) GetAllStations(ctx context.Context, request *proto.Request) (*proto.StationList, error) {
+	stationList := &proto.StationList{}
+
+	querySQL := `SELECT * FROM scooter_stations ORDER BY id;`
+	rows, err := scr.db.QueryContext(ctx, querySQL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err := rows.Close()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	for rows.Next() {
+		var station proto.Station
+		err := rows.Scan(&station.Id, &station.Name, &station.IsActive, &station.Latitude,
+			&station.Longitude)
+		if err != nil {
+			return nil, err
+		}
+
+		stationList.Stations = append(stationList.Stations, &station)
+	}
+	return stationList, nil
+}
+
+//GetAllScootersByStationID - returns a list of scooters on the chosen station by its ID.
 func (scr *ScooterRepo) GetAllScootersByStationID(ctx context.Context, id *proto.StationID) (*proto.ScooterList, error) {
 	scooterList := &proto.ScooterList{}
 
@@ -73,7 +108,7 @@ func (scr *ScooterRepo) GetAllScootersByStationID(ctx context.Context, id *proto
 					WHERE ss.station_id=$1
 					ORDER BY s.id`
 
-	rows, err := scr.db.QueryContext(ctx, querySQL, id.Id)
+	rows, err := scr.db.QueryContext(ctx, querySQL, int(id.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -83,15 +118,14 @@ func (scr *ScooterRepo) GetAllScootersByStationID(ctx context.Context, id *proto
 			log.Fatal(err)
 		}
 	}()
-
 	for rows.Next() {
-		var scooter *proto.Scooter
+		var scooter proto.Scooter
 		err := rows.Scan(&scooter.Id, &scooter.MaxWeight, &scooter.ScooterModel, &scooter.BatteryRemain,
 			&scooter.CanBeRent)
 		if err != nil {
 			return nil, err
 		}
-		scooterList.Scooters = append(scooterList.Scooters, scooter)
+		scooterList.Scooters = append(scooterList.Scooters, &scooter)
 	}
 	return scooterList, nil
 }
@@ -116,6 +150,21 @@ func (scr *ScooterRepo) GetScooterById(ctx context.Context, id *proto.ScooterID)
 	return scooter, nil
 }
 
+//GetStationById - returns a station with a selected ID.
+func (scr *ScooterRepo) GetStationById(ctx context.Context, id *proto.StationID) (*proto.Station, error) {
+	station := &proto.Station{}
+
+	querySQL := `SELECT * FROM scooter_stations WHERE id = $1`
+	row := scr.db.QueryRowContext(ctx, querySQL, int(id.Id))
+	err := row.Scan(&station.Id, &station.Name, &station.IsActive, &station.Latitude, &station.Longitude)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+
+	return station, err
+}
+
 //GetScooterStatus returns the ScooterStatus model of the chosen scooter by its ID.
 func (scr *ScooterRepo) GetScooterStatus(ctx context.Context, id *proto.ScooterID) (*proto.ScooterStatus, error) {
 	var scooterStatus = &proto.ScooterStatus{}
@@ -132,7 +181,7 @@ func (scr *ScooterRepo) GetScooterStatus(ctx context.Context, id *proto.ScooterI
 
 	row := scr.db.QueryRowContext(ctx, querySQL, int(id.Id))
 	err = row.Scan(&scooterStatus.BatteryRemain,
-		&scooterStatus.Location.Latitude, &scooterStatus.Location.Longitude)
+		&scooterStatus.Latitude, &scooterStatus.Longitude)
 	if err != nil {
 		return nil, err
 	}
@@ -151,17 +200,23 @@ func (scr *ScooterRepo) CreateScooterStatusInRent(ctx context.Context,
 		return nil, err
 	}
 
-	scooterStatusInRent.Location = scooterStatus.Location
+	scooterStatusInRent.Latitude = scooterStatus.Latitude
+	scooterStatusInRent.Longitude = scooterStatus.Longitude
 
 	querySQL := `INSERT INTO scooter_statuses_in_rent(date_time, latitude, longitude) 
 					VALUES(now(), $1, $2) RETURNING id, date_time`
 
-	err = scr.db.QueryRowContext(ctx, querySQL, scooterStatus.Location.Latitude,
-		scooterStatus.Location.Longitude).Scan(&scooterStatusInRent.ScooterID, &scooterStatusInRent.DateTime)
+	var statusTime time.Time
+
+	err = scr.db.QueryRowContext(ctx, querySQL, scooterStatus.Latitude,
+		scooterStatus.Longitude).Scan(&scooterStatusInRent.ScooterID, &statusTime)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
 	}
+
+	protoTime := timestamppb.New(statusTime)
+	scooterStatusInRent.DateTime = protoTime
 
 	return &scooterStatusInRent, nil
 }
@@ -188,14 +243,4 @@ func (scr *ScooterRepo) SendCurrentStatus(ctx context.Context, status *proto.Sen
 		}
 	}()
 	return &proto.Response{}, err
-}
-
-func (scr *ScooterRepo) GetStationById(ctx context.Context,id *proto.StationID) (*proto.Station, error) {
-	station := &proto.Station{}
-
-	querySQL := `SELECT * FROM scooter_stations WHERE id = $1;`
-	row := scr.db.QueryRowContext(ctx, querySQL, id.Id)
-	err := row.Scan(&station.Id, &station.Name, &station.IsActive, &station.Location.Latitude, &station.Location.Longitude)
-
-	return station, err
 }

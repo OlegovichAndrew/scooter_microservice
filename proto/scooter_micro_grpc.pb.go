@@ -27,6 +27,7 @@ type ScooterServiceClient interface {
 	SendCurrentStatus(ctx context.Context, in *SendStatus, opts ...grpc.CallOption) (*Response, error)
 	CreateScooterStatusInRent(ctx context.Context, in *ScooterID, opts ...grpc.CallOption) (*ScooterStatusInRent, error)
 	GetStationByID(ctx context.Context, in *StationID, opts ...grpc.CallOption) (*Station, error)
+	GetAllStations(ctx context.Context, in *Request, opts ...grpc.CallOption) (*StationList, error)
 }
 
 type scooterServiceClient struct {
@@ -166,6 +167,15 @@ func (c *scooterServiceClient) GetStationByID(ctx context.Context, in *StationID
 	return out, nil
 }
 
+func (c *scooterServiceClient) GetAllStations(ctx context.Context, in *Request, opts ...grpc.CallOption) (*StationList, error) {
+	out := new(StationList)
+	err := c.cc.Invoke(ctx, "/proto.ScooterService/GetAllStations", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ScooterServiceServer is the server API for ScooterService service.
 // All implementations must embed UnimplementedScooterServiceServer
 // for forward compatibility
@@ -179,6 +189,7 @@ type ScooterServiceServer interface {
 	SendCurrentStatus(context.Context, *SendStatus) (*Response, error)
 	CreateScooterStatusInRent(context.Context, *ScooterID) (*ScooterStatusInRent, error)
 	GetStationByID(context.Context, *StationID) (*Station, error)
+	GetAllStations(context.Context, *Request) (*StationList, error)
 	mustEmbedUnimplementedScooterServiceServer()
 }
 
@@ -212,6 +223,9 @@ func (UnimplementedScooterServiceServer) CreateScooterStatusInRent(context.Conte
 }
 func (UnimplementedScooterServiceServer) GetStationByID(context.Context, *StationID) (*Station, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetStationByID not implemented")
+}
+func (UnimplementedScooterServiceServer) GetAllStations(context.Context, *Request) (*StationList, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllStations not implemented")
 }
 func (UnimplementedScooterServiceServer) mustEmbedUnimplementedScooterServiceServer() {}
 
@@ -399,6 +413,24 @@ func _ScooterService_GetStationByID_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScooterService_GetAllStations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScooterServiceServer).GetAllStations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.ScooterService/GetAllStations",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScooterServiceServer).GetAllStations(ctx, req.(*Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ScooterService_ServiceDesc is the grpc.ServiceDesc for ScooterService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -433,6 +465,10 @@ var ScooterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStationByID",
 			Handler:    _ScooterService_GetStationByID_Handler,
+		},
+		{
+			MethodName: "GetAllStations",
+			Handler:    _ScooterService_GetAllStations_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
